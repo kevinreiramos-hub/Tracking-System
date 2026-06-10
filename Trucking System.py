@@ -177,36 +177,41 @@ def delete_assignment(aid):
 init_db()
 
 # =============================================================================
-# 3. BROWSER STORAGE SESSIONS & AUTH GATE
+# 3. BULLETPROOF INSTANT NATIVE URL PATH AUTH PROTOCOL
 # =============================================================================
 if "auth" not in st.session_state:
     st.session_state.auth = None
 
-# Query local storage for a saved user session token
-saved_session_str = streamlit_js_eval(
-    data_string="localStorage.getItem('cord_user_session');",
-    key="get_local_session"
+# Pure execution script injected directly into browser execution stream
+st.components.v1.html(
+    """
+    <script>
+    const sessionStr = window.localStorage.getItem('cord_user_session');
+    if (sessionStr) {
+        try {
+            const data = JSON.parse(sessionStr);
+            if (data && data.username) {
+                const url = new URL(window.parent.location.href);
+                if (url.searchParams.get('user') !== data.username) {
+                    url.searchParams.set('user', data.username);
+                    window.parent.location.href = url.href;
+                }
+            }
+        } catch(e) {}
+    }
+    </script>
+    """,
+    height=0, width=0
 )
 
-# FIXED HANDSHAKE LOGIC:
-# If python doesn't have an auth session, we MUST wait until streamlit_js_eval 
-# finishes initializing in the browser DOM. If the component key is missing from session_state,
-# we force a silent rerun to capture the browser token instead of exposing the login screen.
-if st.session_state.auth is None and "get_local_session" not in st.session_state:
-    st.empty()
-    st.rerun()
+# Process instant backend queries if present inside the browser URL parameters
+query_user = st.query_params.get("user")
+if query_user and st.session_state.auth is None:
+    rec = get_user(query_user.strip().lower())
+    if rec:
+        st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
 
-# If browser session data returns valid, automatically load user parameters
-if saved_session_str and st.session_state.auth is None:
-    try:
-        saved_data = json.loads(saved_session_str)
-        rec = get_user(saved_data["username"])
-        if rec:
-            st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
-            st.rerun()
-    except Exception:
-        pass
-
+# Render form gate only if url verification checks fall flat
 if st.session_state.auth is None:
     st.title("🔐 Cord Chemicals Delivery — Sign in")
     with st.form("login"):
@@ -218,10 +223,12 @@ if st.session_state.auth is None:
         if rec and verify_pw(p, rec["salt"], rec["pwd"]):
             user_payload = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
             st.session_state.auth = user_payload
+            st.query_params["user"] = rec["username"]
             
-            # Inject session payload straight into the browser local storage
+            # Save token to localStorage to protect future refreshes
+            escaped_payload = json.dumps(user_payload).replace("'", "\\'")
             streamlit_js_eval(
-                data_string=f"localStorage.setItem('cord_user_session', '{json.dumps(user_payload)}');",
+                data_string=f"localStorage.setItem('cord_user_session', '{escaped_payload}');",
                 key="set_local_session"
             )
             st.rerun()
@@ -645,12 +652,12 @@ with st.sidebar:
     st.markdown(f"**Signed in:** {USER['name']}  \n*Role: {USER['role']}*")
     if st.button("Log out", use_container_width=True):
         st.session_state.auth = None
-        # Clear the browser database token completely on logout
+        st.query_params.clear()
+        # Clean local storage context parameters completely on logout
         streamlit_js_eval(
             data_string="localStorage.removeItem('cord_user_session');",
             key="clear_local_session"
         )
-        st.write("<script>localStorage.removeItem('cord_user_session');</script>", unsafe_allow_html=True)
         st.rerun()
     with st.expander("Change my password"):
         np1 = st.text_input("New password", type="password", key="np1")
