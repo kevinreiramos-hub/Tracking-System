@@ -1,10 +1,8 @@
 streamlit
+streamlit-folium
+streamlit-js-eval
+streamlit-geolocation==0.1.2
 pandas
 numpy
 folium
-streamlit-folium
 requests
-scipy
-streamlit-js-eval
-ortools
-streamlit_geolocation
