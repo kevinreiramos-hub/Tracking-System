@@ -852,8 +852,12 @@ def driver_page():
     
     # --- UPGRADED INTERACTIVE GEOLOCATION ACCESS PROTOCOL FORCING PERMISSION DIALOGS ---
     loc_json = streamlit_js_eval(
-        data_string="""
+        data_string=\"\"\"
         (async function() {
+            // Explicit Context and API presence diagnostic guard
+            if (!navigator.geolocation) {
+                return JSON.stringify({latitude: null, longitude: null, error: true, code: -1, isSecureContext: window.isSecureContext});
+            }
             try {
                 if (navigator.permissions && navigator.permissions.query) {
                     await navigator.permissions.query({ name: 'geolocation' });
@@ -865,25 +869,29 @@ def driver_page():
                         resolve(JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false, code: 0}));
                     }, 
                     function(err) {
-                        resolve(JSON.stringify({latitude: null, longitude: null, error: true, code: err.code}));
+                        resolve(JSON.stringify({latitude: null, longitude: null, error: true, code: err.code, isSecureContext: window.isSecureContext}));
                     }, 
                     {enableHighAccuracy: true, timeout: 7000, maximumAge: 0}
                 );
             });
         })()
-        """, 
+        \"\"\", 
         key="get_location"
     )
     
     driver_coords = None
     gps_hardware_error = False
     permission_denied_error = False
+    unsecure_context_error = False
     
     if loc_json:
         try:
             parsed_gps = json.loads(loc_json)
             if parsed_gps.get("error") == True:
-                if parsed_gps.get("code") == 1: 
+                # Code -1 means API doesn't exist at all on navigator object (typical unsecure HTTP block)
+                if parsed_gps.get("code") == -1 or parsed_gps.get("isSecureContext") == False:
+                    unsecure_context_error = True
+                elif parsed_gps.get("code") == 1: 
                     permission_denied_error = True
                 else:
                     gps_hardware_error = True
@@ -892,9 +900,24 @@ def driver_page():
         except Exception:
             pass
 
-    if permission_denied_error:
+    if unsecure_context_error:
         st.markdown(
-            """
+            \"\"\"
+            <div style="background-color: #FF4136; color: white; padding: 18px; border-radius: 12px; margin-bottom: 22px; font-family: sans-serif; box-shadow: 0px 4px 10px rgba(0,0,0,0.15);">
+                🚫 <b>Insecure HTTP Connection Blocked by Browser!</b><br>
+                Mobile browsers strictly disable GPS functionality on plain unencrypted <code>http://</code> links.<br><br>
+                <b>How to Fix:</b>
+                <ul style="margin-top: 6px; margin-bottom: 0px; padding-left: 20px; line-height: 1.5;">
+                    <li>You must access this application using a secure connection link starting with <b><code>https://</code></b> instead of http.</li>
+                    <li>If testing locally, try routing your server using a secure proxy link (e.g., via <code>ngrok http 8501</code>) to obtain a secure public URL.</li>
+                </ul>
+            </div>
+            \"\"\", 
+            unsafe_allow_html=True
+        )
+    elif permission_denied_error:
+        st.markdown(
+            \"\"\"
             <div style="background-color: #FF9500; color: white; padding: 16px; border-radius: 10px; margin-bottom: 22px; font-family: sans-serif;">
                 🔒 <b>Browser Location Access Blocked!</b><br>
                 Your phone's global GPS is ON, but your browser is blocking this website. 
@@ -904,18 +927,18 @@ def driver_page():
                 </ul>
                 Then refresh the page!
             </div>
-            """, 
+            \"\"\", 
             unsafe_allow_html=True
         )
     elif gps_hardware_error or not driver_coords:
         st.markdown(
-            """
+            \"\"\"
             <div id="gps_err_flag" style="background-color: #FF4136; color: white; padding: 16px; 
                         border-radius: 10px; margin-bottom: 22px; font-weight: bold; font-family: sans-serif;">
                 ⚠️ <b>GPS Hardware Signal Missing!</b><br>
                 Please ensure location permissions are active and that you are not inside a deep basement blocking satellite reception.
             </div>
-            """, 
+            \"\"\", 
             unsafe_allow_html=True
         )
 
