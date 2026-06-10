@@ -7,3 +7,4 @@ requests
 scipy
 streamlit-js-eval
 ortools
+streamlit_geolocation
