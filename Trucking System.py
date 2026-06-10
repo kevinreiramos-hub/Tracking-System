@@ -188,6 +188,12 @@ saved_session_str = streamlit_js_eval(
     key="get_local_session"
 )
 
+# Fix: If the session token string hasn't arrived from JavaScript yet, hold the script 
+# in a brief loading screen state so it doesn't instantly drop into the login interface
+if saved_session_str is None and st.session_state.auth is None:
+    with st.spinner("Verifying active session..."):
+        st.stop()
+
 # If a browser session exists and Python state is currently empty, recover it automatically
 if saved_session_str and st.session_state.auth is None:
     try:
