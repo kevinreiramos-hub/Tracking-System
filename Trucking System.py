@@ -258,18 +258,37 @@ def single_haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 
-def get_osrm_route(start_lat, start_lng, end_lat, end_lng, server):
-    url = f"{server}/route/v1/driving/{start_lng},{start_lat};{end_lng},{end_lat}?overview=full&geometries=geojson"
+def get_osrm_route_with_steps(start_lat, start_lng, end_lat, end_lng, server):
+    """Fetches full geometric shape coordinates alongside step-by-step street text maneuvers from OSRM."""
+    url = f"{server}/route/v1/driving/{start_lng},{start_lat};{end_lng},{end_lat}?overview=full&geometries=geojson&steps=true"
+    steps_list = []
     try:
         response = requests.get(url, timeout=8)
         if response.status_code == 200:
             data = response.json()
             if data.get("routes"):
-                coords = data["routes"][0]["geometry"]["coordinates"]
-                return [[c[1], c[0]] for c in coords]
+                route = data["routes"][0]
+                coords = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
+                
+                # Parse OSRM steps
+                for leg in route.get("legs", []):
+                    for step in leg.get("steps", []):
+                        maneuver = step.get("maneuver", {})
+                        instruction = maneuver.get("instruction", "")
+                        street = step.get("name", "")
+                        distance = step.get("distance", 0.0)
+                        
+                        if instruction:
+                            if street and street != "":
+                                desc = f"{instruction} onto {street}"
+                            else:
+                                desc = instruction
+                            steps_list.append({"text": desc, "distance": distance})
+                            
+                return coords, steps_list
     except Exception:
         pass
-    return [[start_lat, start_lng], [end_lat, end_lng]]
+    return [[start_lat, start_lng], [end_lat, end_lng]], [{"text": "Proceed toward destination", "distance": 0.0}]
 
 
 def haversine_matrix(coords):
@@ -317,10 +336,18 @@ def get_mapbox_matrices(coords_tuple, token):
 
 
 @st.cache_data(show_spinner=False)
-def get_mapbox_congested_route(p_lat, p_lng, c_lat, c_lng, token):
+def get_mapbox_congested_route_with_steps(p_lat, p_lng, c_lat, c_lng, token):
+    """Fetches congestion traffic maps together with step text directions from Mapbox."""
     url = f"https://api.mapbox.com/directions/v5/mapbox/driving-traffic/{p_lng},{p_lat};{c_lng},{c_lat}"
-    params = {"geometries": "geojson", "overview": "full",
-              "annotations": "congestion", "access_token": token}
+    params = {
+        "geometries": "geojson", 
+        "overview": "full",
+        "annotations": "congestion", 
+        "steps": "true",
+        "banner_instructions": "true",
+        "access_token": token
+    }
+    steps_list = []
     try:
         resp = requests.get(url, params=params, timeout=12)
         if resp.status_code == 200:
@@ -329,10 +356,19 @@ def get_mapbox_congested_route(p_lat, p_lng, c_lat, c_lng, token):
                 route = data["routes"][0]
                 coords = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
                 cong = route["legs"][0].get("annotation", {}).get("congestion")
-                return coords, cong
+                
+                # Parse step text metadata
+                for leg in route.get("legs", []):
+                    for step in leg.get("steps", []):
+                        text_instruction = step.get("maneuver", {}).get("instruction", "")
+                        distance = step.get("distance", 0.0)
+                        if text_instruction:
+                            steps_list.append({"text": text_instruction, "distance": distance})
+                            
+                return coords, cong, steps_list
     except Exception:
         pass
-    return None, None
+    return None, None, [{"text": "Follow designated track layout", "distance": 0.0}]
 
 
 def congestion_color(level):
@@ -538,33 +574,49 @@ def optimize_single_route(df, objective, traffic_factor, provider, server, mapbo
     return {"order": order, "durations": durations, "distances": distances, "source": source, "factor": factor}
 
 
-def build_route_map(full_seq, current_idx, use_mapbox, token, server, map_height, driver_coords=None):
-    center = full_seq[current_idx]
+def build_route_map(full_seq, current_idx, use_mapbox, token, server, driver_coords=None, center_on_driver=False):
+    """Generates the interactive Folium map visualization, centered dynamic payload tracking."""
+    # Base viewport centering coordinate hierarchy selector
+    if center_on_driver and driver_coords and driver_coords.get("latitude"):
+        center_lat = driver_coords["latitude"]
+        center_lng = driver_coords["longitude"]
+        zoom_val = 15
+    else:
+        center = full_seq[current_idx]
+        center_lat = center["lat"]
+        center_lng = center["lng"]
+        zoom_val = 13
+
     if use_mapbox:
         tiles_url = ("https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/"
                      f"{{z}}/{{x}}/{{y}}?access_token={token}")
-        m = folium.Map(location=[center["lat"], center["lng"]], zoom_start=13,
+        m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val,
                        tiles=tiles_url, attr="© Mapbox © OpenStreetMap")
     else:
-        m = folium.Map(location=[center["lat"], center["lng"]], zoom_start=13)
+        m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val)
 
     depot = full_seq[0]
     folium.Marker([depot["lat"], depot["lng"]], popup=depot["name"],
                   icon=folium.Icon(color="black", icon="home")).add_to(m)
 
-    # Plot driver's active mobile GPS track coordinates if streaming live
+    # Plot signed-in active telemetry hardware pin location
     if driver_coords and driver_coords.get("latitude"):
         folium.Marker(
             [driver_coords["latitude"], driver_coords["longitude"]],
-            popup="🚚 Active Driver Tracking",
-            icon=folium.Icon(color="purple", icon="truck", prefix="fa")
+            popup="🎯 Your Signed-in Device Location",
+            icon=folium.Icon(color="darkpurple", icon="circle-user", prefix="fa")
         ).add_to(m)
+
+    navigation_steps = []
 
     for i in range(1, current_idx + 1):
         a, b = full_seq[i - 1], full_seq[i]
         active = (i == current_idx)
+        
         if use_mapbox:
-            coords, cong = get_mapbox_congested_route(a["lat"], a["lng"], b["lat"], b["lng"], token)
+            coords, cong, steps_data = get_mapbox_congested_route_with_steps(a["lat"], a["lng"], b["lat"], b["lng"], token)
+            if active:
+                navigation_steps = steps_data
             if coords:
                 draw_congested_path(m, coords, cong, weight=7 if active else 4,
                                     opacity=0.95 if active else 0.55)
@@ -572,20 +624,24 @@ def build_route_map(full_seq, current_idx, use_mapbox, token, server, map_height
                 folium.PolyLine([[a["lat"], a["lng"]], [b["lat"], b["lng"]]], color="#9E9E9E",
                                 weight=3, opacity=0.5, dash_array="6,8").add_to(m)
         else:
-            pts = get_osrm_route(a["lat"], a["lng"], b["lat"], b["lng"], server)
+            pts, steps_data = get_osrm_route_with_steps(a["lat"], a["lng"], b["lat"], b["lng"], server)
+            if active:
+                navigation_steps = steps_data
             folium.PolyLine(pts, color="#0033CC" if active else "#3366FF",
                             weight=4 if active else 3, opacity=0.65 if active else 0.45,
                             dash_array="10,8").add_to(m)
+                            
         last = (i == len(full_seq) - 1)
         if last:
             continue
         if active:
-            folium.Marker([b["lat"], b["lng"]], popup=f"CURRENT:<br>{b['name']}",
+            folium.Marker([b["lat"], b["lng"]], popup=f"CURRENT TARGET:<br>{b['name']}",
                           icon=folium.Icon(color="red", icon="play")).add_to(m)
         else:
             folium.Marker([b["lat"], b["lng"]], popup=f"Visited:<br>{b['name']}",
                           icon=folium.Icon(color="blue", icon="ok")).add_to(m)
-    return m
+                          
+    return m, navigation_steps
 
 
 def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_height, remarks_map=None, driver_coords=None):
@@ -595,35 +651,70 @@ def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_heigh
 
     if step_key not in st.session_state:
         st.session_state[step_key] = 1
+        
+    # Initialization flags for view centering operations
+    center_flag_key = f"{step_key}_center_on_driver"
+    if center_flag_key not in st.session_state:
+        st.session_state[center_flag_key] = False
 
-    c_prev, c_text, c_next = st.columns([1, 4, 1])
+    # Control Interface Buttons
+    c_prev, c_center, c_next = st.columns([1, 2, 1])
     with c_prev:
-        if st.button("⬅️ Previous", disabled=(st.session_state[step_key] <= 1),
+        if st.button("⬅️ Previous Stop", disabled=(st.session_state[step_key] <= 1),
                      use_container_width=True, key=f"{step_key}_prev"):
             st.session_state[step_key] -= 1
+            st.session_state[center_flag_key] = False
+    with c_center:
+        if st.button("🎯 Center Map on My Location", use_container_width=True, key=f"{step_key}_recenter"):
+            st.session_state[center_flag_key] = True
     with c_next:
-        if st.button("Next ➡️", disabled=(st.session_state[step_key] >= last_pos),
+        if st.button("Next Stop ➡️", disabled=(st.session_state[step_key] >= last_pos),
                      use_container_width=True, key=f"{step_key}_next"):
             st.session_state[step_key] += 1
+            st.session_state[center_flag_key] = False
 
     cur = max(1, min(st.session_state[step_key], last_pos))
     st.session_state[step_key] = cur
     dest = full_seq[cur]
 
-    with c_text:
-        if cur == last_pos:
-            st.markdown(f"<h3 style='text-align:center;color:#1E88E5;'>🏁 Return to Base: {dest['name']}</h3>",
-                        unsafe_allow_html=True)
-        else:
-            st.markdown(f"<h3 style='text-align:center;color:#1E88E5;'>Stop {cur} of {num_deliveries}: {dest['name']}</h3>",
-                        unsafe_allow_html=True)
-            rmk = remarks_map.get(dest["name"], "")
-            if rmk:
-                st.markdown(f"<p style='text-align:center;'><i>Remarks: {rmk}</i></p>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Generate route shapes and extract step instructions payload
+    m, nav_steps = build_route_map(
+        full_seq, cur, use_mapbox, token, server, 
+        driver_coords=driver_coords, 
+        center_on_driver=st.session_state[center_flag_key]
+    )
 
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.markdown("### 🗺️ Itinerary")
+        if cur == last_pos:
+            st.markdown(f"### 🏁 Next Target: Return to Base\n**{dest['name']}**")
+        else:
+            st.markdown(f"### 🎯 Next Target: Stop {cur} of {num_deliveries}\n**{dest['name']}**")
+            rmk = remarks_map.get(dest["name"], "")
+            if rmk:
+                st.caption(f"*Dispatcher Instructions: {rmk}*")
+
+        # --- GOOGLE MAPS STYLE TURN-BY-TURN DIRECTION GUIDE CARD ---
+        st.markdown("#### 🧭 Driving & Navigation Guide")
+        if nav_steps:
+            # Build scrollable container element for steps metrics tracking
+            nav_html = "<div style='max-height: 280px; overflow-y: auto; padding: 10px; border: 1px solid #ddd; border-radius: 6px; background-color: #f9f9f9;'>"
+            for idx, step in enumerate(nav_steps):
+                dist_str = f"{step['distance']:.0f}m" if step['distance'] < 1000 else f"{step['distance']/1000:.1f}km"
+                nav_html += f"""
+                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 6px;'>
+                    <span style='font-size: 14px; color: #333;'><b>{idx + 1}.</b> {step['text']}</span>
+                    <span style='font-size: 12px; color: #666; font-weight: bold; margin-left: 10px; white-space: nowrap;'>{dist_str}</span>
+                </div>
+                """
+            nav_html += "</div>"
+            st.components.v1.html(nav_html, height=295)
+        else:
+            st.info("No text navigation instructions found for this sector segment.")
+
+        st.markdown("### 📋 Sequence Journey Itinerary")
         st.markdown(f"🚩 **Start:** {full_seq[0]['name']}")
         for step in range(1, len(full_seq)):
             name = full_seq[step]["name"]
@@ -635,11 +726,11 @@ def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_heigh
                 st.markdown(f"🎯 **Stop {step}: {name}**")
             else:
                 st.markdown(f"⏳ **Stop {step}:** {name}")
+                
     with col2:
-        m = build_route_map(full_seq, cur, use_mapbox, token, server, map_height, driver_coords)
-        st_folium(m, width=800, height=map_height, key=f"{step_key}_map_{cur}", returned_objects=[])
-    if use_mapbox:
-        st.caption("Route traffic: 🟢 clear · 🟠 moderate · 🔴 heavy · 🟥 severe · ⚪ no data (Mapbox live).")
+        st_folium(m, width=800, height=map_height, key=f"{step_key}_map_{cur}_run_{st.session_state[center_flag_key]}", returned_objects=[])
+        if use_mapbox:
+            st.caption("Route traffic indicators: 🟢 clear · 🟠 moderate · 🔴 heavy · 🟥 severe · ⚪ no data (Mapbox Engine).")
 
 
 def depot_node():
