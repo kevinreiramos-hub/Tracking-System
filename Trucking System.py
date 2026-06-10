@@ -182,23 +182,16 @@ init_db()
 if "auth" not in st.session_state:
     st.session_state.auth = None
 
-# Query the browser's local storage for a saved user session token
+# Silently query the browser's local storage for a saved user session token
 saved_session_str = streamlit_js_eval(
     data_string="localStorage.getItem('cord_user_session');",
     key="get_local_session"
 )
 
-# Fix: If the session token string hasn't arrived from JavaScript yet, hold the script 
-# in a brief loading screen state so it doesn't instantly drop into the login interface
-if saved_session_str is None and st.session_state.auth is None:
-    with st.spinner("Verifying active session..."):
-        st.stop()
-
-# If a browser session exists and Python state is currently empty, recover it automatically
+# If a browser session exists and Python state is empty, auto-login and rerun smoothly
 if saved_session_str and st.session_state.auth is None:
     try:
         saved_data = json.loads(saved_session_str)
-        # Re-verify against database records to ensure account remains valid
         rec = get_user(saved_data["username"])
         if rec:
             st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
@@ -218,7 +211,7 @@ if st.session_state.auth is None:
             user_payload = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
             st.session_state.auth = user_payload
             
-            # Inject session payload straight into the browser database so it survives refreshes
+            # Inject session payload straight into the browser local storage
             streamlit_js_eval(
                 data_string=f"localStorage.setItem('cord_user_session', '{json.dumps(user_payload)}');",
                 key="set_local_session"
