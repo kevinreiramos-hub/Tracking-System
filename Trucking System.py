@@ -176,7 +176,7 @@ def delete_assignment(aid):
 init_db()
 
 # =============================================================================
-# 3. BULLETPROOF INSTANT NATIVE URL PATH AUTH PROTOCOL
+# 3. BULLETPROOF INSTANT NATIVE URL PATH PATH AUTH PROTOCOL
 # =============================================================================
 if "auth" not in st.session_state:
     st.session_state.auth = None
@@ -852,7 +852,7 @@ def driver_page():
     
     # --- UPGRADED INTERACTIVE GEOLOCATION ACCESS PROTOCOL FORCING PERMISSION DIALOGS ---
     loc_json = streamlit_js_eval(
-        data_string=\"\"\"
+        data_string="""
         (async function() {
             // Explicit Context and API presence diagnostic guard
             if (!navigator.geolocation) {
@@ -875,7 +875,7 @@ def driver_page():
                 );
             });
         })()
-        \"\"\", 
+        """, 
         key="get_location"
     )
     
@@ -902,7 +902,7 @@ def driver_page():
 
     if unsecure_context_error:
         st.markdown(
-            \"\"\"
+            """
             <div style="background-color: #FF4136; color: white; padding: 18px; border-radius: 12px; margin-bottom: 22px; font-family: sans-serif; box-shadow: 0px 4px 10px rgba(0,0,0,0.15);">
                 🚫 <b>Insecure HTTP Connection Blocked by Browser!</b><br>
                 Mobile browsers strictly disable GPS functionality on plain unencrypted <code>http://</code> links.<br><br>
@@ -912,12 +912,12 @@ def driver_page():
                     <li>If testing locally, try routing your server using a secure proxy link (e.g., via <code>ngrok http 8501</code>) to obtain a secure public URL.</li>
                 </ul>
             </div>
-            \"\"\", 
+            """, 
             unsafe_allow_html=True
         )
     elif permission_denied_error:
         st.markdown(
-            \"\"\"
+            """
             <div style="background-color: #FF9500; color: white; padding: 16px; border-radius: 10px; margin-bottom: 22px; font-family: sans-serif;">
                 🔒 <b>Browser Location Access Blocked!</b><br>
                 Your phone's global GPS is ON, but your browser is blocking this website. 
@@ -927,18 +927,18 @@ def driver_page():
                 </ul>
                 Then refresh the page!
             </div>
-            \"\"\", 
+            """, 
             unsafe_allow_html=True
         )
     elif gps_hardware_error or not driver_coords:
         st.markdown(
-            \"\"\"
+            """
             <div id="gps_err_flag" style="background-color: #FF4136; color: white; padding: 16px; 
                         border-radius: 10px; margin-bottom: 22px; font-weight: bold; font-family: sans-serif;">
                 ⚠️ <b>GPS Hardware Signal Missing!</b><br>
                 Please ensure location permissions are active and that you are not inside a deep basement blocking satellite reception.
             </div>
-            \"\"\", 
+            """, 
             unsafe_allow_html=True
         )
 
