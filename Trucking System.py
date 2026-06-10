@@ -188,14 +188,15 @@ saved_session_str = streamlit_js_eval(
     key="get_local_session"
 )
 
-# Handshake validation check: If Python has no auth state but the evaluation key 
-# has not registered yet, render an empty fallback container to hold execution 
-# without triggering st.stop() or blank screens.
+# FIXED HANDSHAKE LOGIC:
+# If python doesn't have an auth session, we MUST wait until streamlit_js_eval 
+# finishes initializing in the browser DOM. If the component key is missing from session_state,
+# we force a silent rerun to capture the browser token instead of exposing the login screen.
 if st.session_state.auth is None and "get_local_session" not in st.session_state:
     st.empty()
     st.rerun()
 
-# If session records exist and state is currently clean, resume session automatically
+# If browser session data returns valid, automatically load user parameters
 if saved_session_str and st.session_state.auth is None:
     try:
         saved_data = json.loads(saved_session_str)
@@ -649,6 +650,7 @@ with st.sidebar:
             data_string="localStorage.removeItem('cord_user_session');",
             key="clear_local_session"
         )
+        st.write("<script>localStorage.removeItem('cord_user_session');</script>", unsafe_allow_html=True)
         st.rerun()
     with st.expander("Change my password"):
         np1 = st.text_input("New password", type="password", key="np1")
