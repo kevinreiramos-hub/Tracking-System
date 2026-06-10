@@ -850,18 +850,27 @@ def dispatcher_page():
 def driver_page():
     st.title(f"🚚 {USER['name']} — My Deliveries")
     
-    # --- GPS Location Collection Component ---
+    # --- UPGRADED INTERACTIVE GEOLOCATION ACCESS PROTOCOL FORCING PERMISSION DIALOGS ---
     loc_json = streamlit_js_eval(
         data_string="""
-        navigator.geolocation.getCurrentPosition(
-            function(pos){
-                return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false, code: 0});
-            }, 
-            function(err){
-                return JSON.stringify({latitude: null, longitude: null, error: true, code: err.code});
-            }, 
-            {enableHighAccuracy:true, timeout: 6000}
-        );
+        (async function() {
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    await navigator.permissions.query({ name: 'geolocation' });
+                }
+            } catch(e) {}
+            return new Promise((resolve) => {
+                navigator.geolocation.getCurrentPosition(
+                    function(pos) {
+                        resolve(JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false, code: 0}));
+                    }, 
+                    function(err) {
+                        resolve(JSON.stringify({latitude: null, longitude: null, error: true, code: err.code}));
+                    }, 
+                    {enableHighAccuracy: true, timeout: 7000, maximumAge: 0}
+                );
+            });
+        })()
         """, 
         key="get_location"
     )
@@ -874,7 +883,7 @@ def driver_page():
         try:
             parsed_gps = json.loads(loc_json)
             if parsed_gps.get("error") == True:
-                if parsed_gps.get("code") == 1:  # PERMISSION_DENIED constant
+                if parsed_gps.get("code") == 1: 
                     permission_denied_error = True
                 else:
                     gps_hardware_error = True
@@ -883,7 +892,6 @@ def driver_page():
         except Exception:
             pass
 
-    # Dynamic diagnostic alerts tailored to phone context
     if permission_denied_error:
         st.markdown(
             """
@@ -927,7 +935,6 @@ def driver_page():
     a = get_assignment(aid)
     stops = json.loads(a["stops_json"])
 
-    # GEOFENCE PROCESSING HANDSHAKE
     if driver_coords and driver_coords.get("latitude"):
         st.sidebar.success(f"📍 Location Sync Lock Active")
         db_changed = False
