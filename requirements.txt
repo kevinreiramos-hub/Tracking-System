@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+folium
+streamlit-folium
+requests
+scipy
+streamlit-js-eval
+ortools
