@@ -177,10 +177,28 @@ def delete_assignment(aid):
 init_db()
 
 # =============================================================================
-# 3. AUTH GATE
+# 3. BROWSER STORAGE SESSIONS & AUTH GATE
 # =============================================================================
 if "auth" not in st.session_state:
     st.session_state.auth = None
+
+# Query the browser's local storage for a saved user session token
+saved_session_str = streamlit_js_eval(
+    data_string="localStorage.getItem('cord_user_session');",
+    key="get_local_session"
+)
+
+# If a browser session exists and Python state is currently empty, recover it automatically
+if saved_session_str and st.session_state.auth is None:
+    try:
+        saved_data = json.loads(saved_session_str)
+        # Re-verify against database records to ensure account remains valid
+        rec = get_user(saved_data["username"])
+        if rec:
+            st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
+            st.rerun()
+    except Exception:
+        pass
 
 if st.session_state.auth is None:
     st.title("🔐 Cord Chemicals Delivery — Sign in")
@@ -191,7 +209,14 @@ if st.session_state.auth is None:
     if ok:
         rec = get_user(u.strip().lower())
         if rec and verify_pw(p, rec["salt"], rec["pwd"]):
-            st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
+            user_payload = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
+            st.session_state.auth = user_payload
+            
+            # Inject session payload straight into the browser database so it survives refreshes
+            streamlit_js_eval(
+                data_string=f"localStorage.setItem('cord_user_session', '{json.dumps(user_payload)}');",
+                key="set_local_session"
+            )
             st.rerun()
         else:
             st.error("Invalid username or password.")
@@ -513,11 +538,11 @@ def build_route_map(full_seq, current_idx, use_mapbox, token, server, map_height
     folium.Marker([depot["lat"], depot["lng"]], popup=depot["name"],
                   icon=folium.Icon(color="black", icon="home")).add_to(m)
 
-    # Plot driver's current real-time GPS position if available
+    # Plot driver's active mobile GPS track coordinates if streaming live
     if driver_coords and driver_coords.get("latitude"):
         folium.Marker(
             [driver_coords["latitude"], driver_coords["longitude"]],
-            popup="🚚 Driver Current Position",
+            popup="🚚 Active Driver Tracking",
             icon=folium.Icon(color="purple", icon="truck", prefix="fa")
         ).add_to(m)
 
@@ -613,6 +638,11 @@ with st.sidebar:
     st.markdown(f"**Signed in:** {USER['name']}  \n*Role: {USER['role']}*")
     if st.button("Log out", use_container_width=True):
         st.session_state.auth = None
+        # Clear the browser database token completely on logout
+        streamlit_js_eval(
+            data_string="localStorage.removeItem('cord_user_session');",
+            key="clear_local_session"
+        )
         st.rerun()
     with st.expander("Change my password"):
         np1 = st.text_input("New password", type="password", key="np1")
@@ -758,7 +788,7 @@ def dispatcher_page():
             done = sum(1 for s in stops if s.get("delivered"))
             st.write(f"**Progress:** {done}/{len(stops)} delivered · {a['total_km']:.1f} km · ~{a['time_str']} · Dispatcher: {a['created_by']}")
             
-            # Detailed breakdown table for the dispatcher to see timestamps
+            # Live synchronization tracking breakdown for dispatch dashboard
             breakdown_data = []
             for idx, s in enumerate(stops):
                 breakdown_data.append({
@@ -782,8 +812,10 @@ def driver_page():
     st.title(f"🚚 {USER['name']} — My Deliveries")
     
     # --- GPS Location Collection Component ---
-    # Captures high-accuracy browser phone coordinates via streamlit-js-eval
-    loc_json = streamlit_js_eval(data_string="navigator.geolocation.getCurrentPosition(function(pos){return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude})}, function(err){return null;}, {enableHighAccuracy:true});", key="get_location")
+    loc_json = streamlit_js_eval(
+        data_string="navigator.geolocation.getCurrentPosition(function(pos){return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude})}, function(err){return null;}, {enableHighAccuracy:true});", 
+        key="get_location"
+    )
     
     driver_coords = None
     if loc_json:
@@ -813,14 +845,13 @@ def driver_page():
     if driver_coords and driver_coords.get("latitude"):
         st.sidebar.success(f"📍 GPS Active: {driver_coords['latitude']:.5f}, {driver_coords['longitude']:.5f}")
         
-        # Check coordinates against all outstanding destinations
         for s in stops:
             if not s.get("delivered"):
                 dist_to_stop = single_haversine(
                     driver_coords["latitude"], driver_coords["longitude"],
                     s["lat"], s["lng"]
                 )
-                # Auto check-in trigger if within range
+                # Auto check-in trigger if vehicle enters coordinate radius
                 if dist_to_stop <= GEOFENCE_RADIUS_METERS:
                     s["delivered"] = True
                     s["auto_verified"] = True
@@ -846,7 +877,7 @@ def driver_page():
     remarks_map = {s["name"]: s.get("remarks", "") for s in stops}
     use_mapbox = bool(DEFAULT_MAPBOX_TOKEN)
     
-    # Pass real-time driver coordinates to display on map as purple truck marker
+    # Pass live telemetry stream markers down to the rendering interface
     render_step_tracker(full_seq, "drv_step", use_mapbox, DEFAULT_MAPBOX_TOKEN,
                         OSRM_DEFAULT, 520, remarks_map, driver_coords=driver_coords)
 
@@ -862,7 +893,6 @@ def driver_page():
         
     if st.button("💾 Save progress manually", type="primary"):
         for i, (s, flag) in enumerate(zip(stops, new_flags)):
-            # If manually checked but didn't have timestamp yet, add it
             if flag and not s.get("delivered"):
                 s["delivered"] = True
                 s["arrival_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
