@@ -851,19 +851,24 @@ def dispatcher_page():
 def driver_page():
     st.title(f"🚚 {USER['name']} — My Deliveries")
     
-    # RELIABLE GEOLOCATION ACCESS
-    # streamlit-geolocation handles the HTTPS/Security Context requirements
-    location = streamlit_geolocation(
-        timeout=10000, 
-        desired_accuracy="high", 
-        key="driver_gps"
-    )
+    # Use a try-except block to handle potential component loading issues
+    try:
+        # Simplest call to avoid TypeError with parameter mapping
+        location = streamlit_geolocation(
+            timeout=10000, 
+            desired_accuracy="high"
+        )
+    except Exception as e:
+        st.error(f"Geolocation component error: {e}")
+        location = None
     
     driver_coords = None
     
     # Process Location Data
-    if location and "latitude" in location and location["latitude"] is not None:
+    if isinstance(location, dict) and location.get("latitude") is not None:
         driver_coords = {"latitude": location["latitude"], "longitude": location["longitude"]}
+    
+    # ... rest of your code remains the same ...
     elif location and location.get("error"):
         st.warning(f"GPS Status: {location.get('message', 'Permission denied or timed out')}")
         st.info("Ensure you are using an HTTPS connection and have granted location permissions in your browser settings.")
