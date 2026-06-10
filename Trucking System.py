@@ -27,7 +27,6 @@ DEFAULT_MAPBOX_TOKEN = "pk.eyJ1Ijoia2V2aW5yZWkyIiwiYSI6ImNtcHl4ejY4ejA1ODYydHB2d
 OSRM_DEFAULT = "http://router.project-osrm.org"
 DB_PATH = "delivery_app.db"
 
-# Geofence threshold in meters (e.g., 150 meters from delivery point)
 GEOFENCE_RADIUS_METERS = 150.0
 
 ACCOUNTS = pd.DataFrame({
@@ -51,7 +50,7 @@ ACCOUNTS = pd.DataFrame({
     ],
     "Territory": ["Caloocan", "Manila", "Manila", "Quezon City", "Manila", "Mandaluyong", "Muntinlupa"],
     "Latitude": [14.646187, 14.5999652, 14.6003507, 14.6315267, 14.6000217, 14.58631, 14.4189642],
-    "Longitude": [120.983901, 120.9702905, 120.977661, 121.001982, 120.9702217, 121.057465, 121.040753],
+    "Longitude": [120.983901, 120.9702905, 121.001982, 121.001982, 120.9702217, 121.057465, 121.040753],
 })
 
 DRIVERS = ["Alex Colorito", "Ritchel Junio", "Jomer Lumauig"]
@@ -182,7 +181,6 @@ init_db()
 if "auth" not in st.session_state:
     st.session_state.auth = None
 
-# Pure execution script injected directly into browser execution stream
 st.components.v1.html(
     """
     <script>
@@ -204,14 +202,12 @@ st.components.v1.html(
     height=0, width=0
 )
 
-# Process instant backend queries if present inside the browser URL parameters
 query_user = st.query_params.get("user")
 if query_user and st.session_state.auth is None:
     rec = get_user(query_user.strip().lower())
     if rec:
         st.session_state.auth = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
 
-# Render form gate only if url verification checks fall flat
 if st.session_state.auth is None:
     st.title("🔐 Cord Chemicals Delivery — Sign in")
     with st.form("login"):
@@ -224,8 +220,6 @@ if st.session_state.auth is None:
             user_payload = {"username": rec["username"], "name": rec["name"], "role": rec["role"]}
             st.session_state.auth = user_payload
             st.query_params["user"] = rec["username"]
-            
-            # Save token to localStorage to protect future refreshes
             escaped_payload = json.dumps(user_payload).replace("'", "\\'")
             streamlit_js_eval(
                 data_string=f"localStorage.setItem('cord_user_session', '{escaped_payload}');",
@@ -247,7 +241,6 @@ USER = st.session_state.auth
 # 4. SHARED HELPER FUNCTIONS
 # =============================================================================
 def single_haversine(lat1, lon1, lat2, lon2):
-    """Calculates distance between two points in meters."""
     R = 6371000.0
     phi1 = np.radians(lat1)
     phi2 = np.radians(lat2)
@@ -259,7 +252,6 @@ def single_haversine(lat1, lon1, lat2, lon2):
 
 
 def get_osrm_route_with_steps(start_lat, start_lng, end_lat, end_lng, server):
-    """Fetches full geometric shape coordinates alongside step-by-step street text maneuvers from OSRM."""
     url = f"{server}/route/v1/driving/{start_lng},{start_lat};{end_lng},{end_lat}?overview=full&geometries=geojson&steps=true"
     steps_list = []
     try:
@@ -269,22 +261,15 @@ def get_osrm_route_with_steps(start_lat, start_lng, end_lat, end_lng, server):
             if data.get("routes"):
                 route = data["routes"][0]
                 coords = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
-                
-                # Parse OSRM steps
                 for leg in route.get("legs", []):
                     for step in leg.get("steps", []):
                         maneuver = step.get("maneuver", {})
                         instruction = maneuver.get("instruction", "")
                         street = step.get("name", "")
                         distance = step.get("distance", 0.0)
-                        
                         if instruction:
-                            if street and street != "":
-                                desc = f"{instruction} onto {street}"
-                            else:
-                                desc = instruction
+                            desc = f"{instruction} onto {street}" if street else instruction
                             steps_list.append({"text": desc, "distance": distance})
-                            
                 return coords, steps_list
     except Exception:
         pass
@@ -337,7 +322,6 @@ def get_mapbox_matrices(coords_tuple, token):
 
 @st.cache_data(show_spinner=False)
 def get_mapbox_congested_route_with_steps(p_lat, p_lng, c_lat, c_lng, token):
-    """Fetches congestion traffic maps together with step text directions from Mapbox."""
     url = f"https://api.mapbox.com/directions/v5/mapbox/driving-traffic/{p_lng},{p_lat};{c_lng},{c_lat}"
     params = {
         "geometries": "geojson", 
@@ -356,15 +340,12 @@ def get_mapbox_congested_route_with_steps(p_lat, p_lng, c_lat, c_lng, token):
                 route = data["routes"][0]
                 coords = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
                 cong = route["legs"][0].get("annotation", {}).get("congestion")
-                
-                # Parse step text metadata
                 for leg in route.get("legs", []):
                     for step in leg.get("steps", []):
                         text_instruction = step.get("maneuver", {}).get("instruction", "")
                         distance = step.get("distance", 0.0)
                         if text_instruction:
                             steps_list.append({"text": text_instruction, "distance": distance})
-                            
                 return coords, cong, steps_list
     except Exception:
         pass
@@ -575,31 +556,29 @@ def optimize_single_route(df, objective, traffic_factor, provider, server, mapbo
 
 
 def build_route_map(full_seq, current_idx, use_mapbox, token, server, driver_coords=None, center_on_driver=False):
-    """Generates the interactive Folium map visualization, centered dynamic payload tracking."""
-    # Base viewport centering coordinate hierarchy selector
     if center_on_driver and driver_coords and driver_coords.get("latitude"):
         center_lat = driver_coords["latitude"]
         center_lng = driver_coords["longitude"]
-        zoom_val = 15
+        zoom_val = 16
     else:
         center = full_seq[current_idx]
         center_lat = center["lat"]
         center_lng = center["lng"]
-        zoom_val = 13
+        zoom_val = 14
 
     if use_mapbox:
         tiles_url = ("https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/"
                      f"{{z}}/{{x}}/{{y}}?access_token={token}")
         m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val,
-                       tiles=tiles_url, attr="© Mapbox © OpenStreetMap")
+                       tiles=tiles_url, attr="© Mapbox © OpenStreetMap", zoom_control=False)
     else:
-        m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val)
+        m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val, zoom_control=False)
 
-    depot = full_seq[0]
-    folium.Marker([depot["lat"], depot["lng"]], popup=depot["name"],
-                  icon=folium.Icon(color="black", icon="home")).add_to(m)
+    # Plot origin starting location
+    start_node = full_seq[0]
+    folium.Marker([start_node["lat"], start_node["lng"]], popup=start_node["name"],
+                  icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(m)
 
-    # Plot signed-in active telemetry hardware pin location
     if driver_coords and driver_coords.get("latitude"):
         folium.Marker(
             [driver_coords["latitude"], driver_coords["longitude"]],
@@ -618,7 +597,7 @@ def build_route_map(full_seq, current_idx, use_mapbox, token, server, driver_coo
             if active:
                 navigation_steps = steps_data
             if coords:
-                draw_congested_path(m, coords, cong, weight=7 if active else 4,
+                draw_congested_path(m, coords, cong, weight=8 if active else 4,
                                     opacity=0.95 if active else 0.55)
             else:
                 folium.PolyLine([[a["lat"], a["lng"]], [b["lat"], b["lng"]]], color="#9E9E9E",
@@ -628,18 +607,17 @@ def build_route_map(full_seq, current_idx, use_mapbox, token, server, driver_coo
             if active:
                 navigation_steps = steps_data
             folium.PolyLine(pts, color="#0033CC" if active else "#3366FF",
-                            weight=4 if active else 3, opacity=0.65 if active else 0.45,
-                            dash_array="10,8").add_to(m)
+                            weight=5 if active else 3, opacity=0.75 if active else 0.45).add_to(m)
                             
         last = (i == len(full_seq) - 1)
         if last:
             continue
         if active:
             folium.Marker([b["lat"], b["lng"]], popup=f"CURRENT TARGET:<br>{b['name']}",
-                          icon=folium.Icon(color="red", icon="play")).add_to(m)
+                          icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(m)
         else:
             folium.Marker([b["lat"], b["lng"]], popup=f"Visited:<br>{b['name']}",
-                          icon=folium.Icon(color="blue", icon="ok")).add_to(m)
+                          icon=folium.Icon(color="blue", icon="check", prefix="fa")).add_to(m)
                           
     return m, navigation_steps
 
@@ -652,115 +630,125 @@ def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_heigh
     if step_key not in st.session_state:
         st.session_state[step_key] = 1
         
-    # Initialization flags for view centering operations
     center_flag_key = f"{step_key}_center_on_driver"
     if center_flag_key not in st.session_state:
         st.session_state[center_flag_key] = False
-
-    # Control Interface Buttons
-    c_prev, c_center, c_next = st.columns([1, 2, 1])
-    with c_prev:
-        if st.button("⬅️ Previous Stop", disabled=(st.session_state[step_key] <= 1),
-                     use_container_width=True, key=f"{step_key}_prev"):
-            st.session_state[step_key] -= 1
-            st.session_state[center_flag_key] = False
-    with c_center:
-        if st.button("🎯 Center Map on My Location", use_container_width=True, key=f"{step_key}_recenter"):
-            st.session_state[center_flag_key] = True
-    with c_next:
-        if st.button("Next Stop ➡️", disabled=(st.session_state[step_key] >= last_pos),
-                     use_container_width=True, key=f"{step_key}_next"):
-            st.session_state[step_key] += 1
-            st.session_state[center_flag_key] = False
 
     cur = max(1, min(st.session_state[step_key], last_pos))
     st.session_state[step_key] = cur
     dest = full_seq[cur]
 
-    st.markdown("---")
-    
-    # Generate route shapes and extract step instructions payload
+    # Generate map shapes and pull step coordinates
     m, nav_steps = build_route_map(
         full_seq, cur, use_mapbox, token, server, 
         driver_coords=driver_coords, 
         center_on_driver=st.session_state[center_flag_key]
     )
 
-    col1, col2 = st.columns([1, 2])
-    with col1:
+    # --- GOOGLE MAPS FLOATING IN-MAP TURN-BY-TURN CONTAINER CONTROLLER ---
+    floating_nav_html = ""
+    if nav_steps:
+        next_maneuver = nav_steps[0]
+        dist_str = f"{next_maneuver['distance']:.0f}m" if next_maneuver['distance'] < 1000 else f"{next_maneuver['distance']/1000:.1f}km"
+        
+        # Build direct absolute DOM wrapper overlay inside map view canvas frame
+        floating_nav_html = f"""
+        <div style="position: absolute; top: 12px; left: 50%; transform: translateX(-50%); 
+                    width: 90%; max-width: 480px; z-index: 9999; pointer-events: none;">
+            <div style="background-color: #0F9D58; color: white; padding: 14px 18px; 
+                        border-radius: 12px; box-shadow: 0px 4px 12px rgba(0,0,0,0.3);
+                        font-family: 'Roboto', 'Segoe UI', sans-serif; pointer-events: auto;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 22px;">↪️</span>
+                        <div>
+                            <div style="font-size: 15px; font-weight: 600; line-height: 1.2;">{next_maneuver['text']}</div>
+                            <div style="font-size: 12px; opacity: 0.85; margin-top: 2px;">Upcoming Maneuver Sector</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 18px; font-weight: 700; border-left: 1px solid rgba(255,255,255,0.3); padding-left: 12px; white-space: nowrap;">
+                        {dist_str}
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+
+    # Render inside columns layout
+    col_map, col_list = st.columns([2, 1])
+    
+    with col_map:
+        # Inject floating HTML widget overlay directly inside parent column space
+        if floating_nav_html:
+            st.components.v1.html(floating_nav_html, height=0)
+            
+        st_folium(m, width=900, height=map_height, key=f"{step_key}_map_{cur}_rec_{st.session_state[center_flag_key]}", returned_objects=[])
+        
+        # Controls directly below map
+        c_prev, c_center, c_next = st.columns([1, 2, 1])
+        with c_prev:
+            if st.button("⬅️ Previous", disabled=(st.session_state[step_key] <= 1), use_container_width=True, key=f"{step_key}_prev"):
+                st.session_state[step_key] -= 1
+                st.session_state[center_flag_key] = False
+                st.rerun()
+        with c_center:
+            if st.button("🎯 Center Map on Me", use_container_width=True, key=f"{step_key}_recenter"):
+                st.session_state[center_flag_key] = True
+                st.rerun()
+        with c_next:
+            if st.button("Next ➡️", disabled=(st.session_state[step_key] >= last_pos), use_container_width=True, key=f"{step_key}_next"):
+                st.session_state[step_key] += 1
+                st.session_state[center_flag_key] = False
+                st.rerun()
+
+    with col_list:
         if cur == last_pos:
-            st.markdown(f"### 🏁 Next Target: Return to Base\n**{dest['name']}**")
+            st.markdown(f"### 🏁 Returning to Base\n**{dest['name']}**")
         else:
-            st.markdown(f"### 🎯 Next Target: Stop {cur} of {num_deliveries}\n**{dest['name']}**")
+            st.markdown(f"### 🎯 Active Target: Stop {cur} of {num_deliveries}\n**{dest['name']}**")
             rmk = remarks_map.get(dest["name"], "")
             if rmk:
-                st.caption(f"*Dispatcher Instructions: {rmk}*")
+                st.info(f"**Remarks:** {rmk}")
 
-        # --- GOOGLE MAPS STYLE TURN-BY-TURN DIRECTION GUIDE CARD ---
-        st.markdown("#### 🧭 Driving & Navigation Guide")
+        st.markdown("#### 📜 Full Step Checklist Guide")
         if nav_steps:
-            # Build scrollable container element for steps metrics tracking
-            nav_html = "<div style='max-height: 280px; overflow-y: auto; padding: 10px; border: 1px solid #ddd; border-radius: 6px; background-color: #f9f9f9;'>"
+            nav_html = "<div style='max-height: 200px; overflow-y: auto; padding: 8px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;'>"
             for idx, step in enumerate(nav_steps):
-                dist_str = f"{step['distance']:.0f}m" if step['distance'] < 1000 else f"{step['distance']/1000:.1f}km"
-                nav_html += f"""
-                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 6px;'>
-                    <span style='font-size: 14px; color: #333;'><b>{idx + 1}.</b> {step['text']}</span>
-                    <span style='font-size: 12px; color: #666; font-weight: bold; margin-left: 10px; white-space: nowrap;'>{dist_str}</span>
-                </div>
-                """
+                d_str = f"{step['distance']:.0f}m" if step['distance'] < 1000 else f"{step['distance']/1000:.1f}km"
+                nav_html += f"<div style='font-size:13px; margin-bottom:6px; border-bottom:1px solid #eee; padding-bottom:4px;'><b>{idx+1}.</b> {step['text']} ({d_str})</div>"
             nav_html += "</div>"
-            st.components.v1.html(nav_html, height=295)
+            st.components.v1.html(nav_html, height=210)
         else:
-            st.info("No text navigation instructions found for this sector segment.")
+            st.caption("No text layout vectors returned.")
 
         st.markdown("### 📋 Sequence Journey Itinerary")
-        st.markdown(f"🚩 **Start:** {full_seq[0]['name']}")
+        st.markdown(f"🚩 **Start Origin:** {full_seq[0]['name']}")
         for step in range(1, len(full_seq)):
             name = full_seq[step]["name"]
             if step == last_pos:
-                st.markdown(f"{'✅' if cur >= last_pos else '🏁'} **Return to Base:** {name}")
+                st.markdown(f"{'✅' if cur >= last_pos else '🏁'} **Return Base:** {name}")
             elif step < cur:
-                st.markdown(f"✅ **Stop {step}:** ~~{name}~~ *(done)*")
+                st.markdown(f"✅ **Stop {step}:** ~~{name}~~")
             elif step == cur:
                 st.markdown(f"🎯 **Stop {step}: {name}**")
             else:
                 st.markdown(f"⏳ **Stop {step}:** {name}")
-                
-    with col2:
-        st_folium(m, width=800, height=map_height, key=f"{step_key}_map_{cur}_run_{st.session_state[center_flag_key]}", returned_objects=[])
-        if use_mapbox:
-            st.caption("Route traffic indicators: 🟢 clear · 🟠 moderate · 🔴 heavy · 🟥 severe · ⚪ no data (Mapbox Engine).")
 
 
 def depot_node():
     return {"name": DEPOT_NAME, "lat": DEPOT_LAT, "lng": DEPOT_LNG}
 
 # =============================================================================
-# 5. SIDEBAR (account) + ROLE ROUTING
+# 5. SIDEBAR ROUTING
 # =============================================================================
 with st.sidebar:
     st.markdown(f"**Signed in:** {USER['name']}  \n*Role: {USER['role']}*")
     if st.button("Log out", use_container_width=True):
         st.session_state.auth = None
         st.query_params.clear()
-        # Clean local storage context parameters completely on logout
-        streamlit_js_eval(
-            data_string="localStorage.removeItem('cord_user_session');",
-            key="clear_local_session"
-        )
+        streamlit_js_eval(data_string="localStorage.removeItem('cord_user_session');", key="clear_local_session")
         st.rerun()
-    with st.expander("Change my password"):
-        np1 = st.text_input("New password", type="password", key="np1")
-        np2 = st.text_input("Confirm", type="password", key="np2")
-        if st.button("Update password"):
-            if np1 and np1 == np2:
-                set_password(USER["username"], np1)
-                st.success("Password updated.")
-            else:
-                st.error("Passwords are empty or don't match.")
     st.divider()
-
 
 # =============================================================================
 # 6. DISPATCHER PAGE (ADMIN DASHBOARD)
@@ -775,8 +763,7 @@ def dispatcher_page():
         truck = st.selectbox("Truck Name / Plate Number", options=TRUCKS)
 
         st.subheader("📍 Picking Locations")
-        selected_names = st.multiselect("Select accounts to deliver to",
-                                         options=ACCOUNTS["Account Name"].tolist())
+        selected_names = st.multiselect("Select accounts to deliver to", options=ACCOUNTS["Account Name"].tolist())
 
         st.divider()
         st.subheader("🚚 Optimization")
@@ -788,68 +775,51 @@ def dispatcher_page():
         if provider.startswith("Mapbox"):
             mapbox_token = st.text_input("Mapbox access token", value=DEFAULT_MAPBOX_TOKEN, type="password")
             traffic_factor = 1.0
-            st.caption("🚦 Travel times use Mapbox live traffic.")
         else:
-            traffic_label = st.select_slider("Traffic conditions (estimate)",
-                                             options=list(TRAFFIC_LEVELS.keys()), value="Moderate")
+            traffic_label = st.select_slider("Traffic conditions (estimate)", options=list(TRAFFIC_LEVELS.keys()), value="Moderate")
             traffic_factor = TRAFFIC_LEVELS[traffic_label]
         solver_seconds = st.slider("Solver effort (seconds)", 1, 15, 3)
-
-        st.subheader("🗺️ Map")
         map_height = st.slider("Map height (px)", 400, 800, 520, step=20)
-
-        st.subheader("🤖 AI Assistant")
         ai_api_key = st.text_input("Anthropic API key (optional)", type="password")
-        with st.expander("Advanced"):
-            osrm_server = st.text_input("OSRM server URL", value=OSRM_DEFAULT)
-            ai_model = st.text_input("AI model", value="claude-sonnet-4-6")
+        osrm_server = st.text_input("OSRM server URL", value=OSRM_DEFAULT)
+        ai_model = st.text_input("AI model", value="claude-sonnet-4-6")
 
     if "remarks" not in st.session_state:
         st.session_state.remarks = {}
 
     st.subheader("📋 Delivery Manifest")
-    st.caption(f"Driver: **{driver}** |  Truck: **{truck}** |  Depot: **{DEPOT_NAME}**")
     picked = ACCOUNTS[ACCOUNTS["Account Name"].isin(selected_names)].reset_index(drop=True)
 
     if picked.empty:
-        st.info("👈 Use **Picking Locations** in the sidebar to add accounts.")
+        st.info("👈 Use Picking Locations in the sidebar to add accounts.")
     else:
         disp = picked[["Account Name", "Address", "Territory"]].copy()
         disp.insert(0, "No", range(1, len(disp) + 1))
         disp["Remarks"] = [st.session_state.remarks.get(n, "") for n in disp["Account Name"]]
         edited = st.data_editor(disp, hide_index=True, num_rows="fixed", use_container_width=True,
                                 disabled=["No", "Account Name", "Address", "Territory"],
-                                column_config={"No": st.column_config.NumberColumn("No #", width="small"),
-                                               "Remarks": st.column_config.TextColumn("Remarks")},
+                                column_config={"No": st.column_config.NumberColumn("No #", width="small")},
                                 key="manifest_table")
         for _, row in edited.iterrows():
             st.session_state.remarks[row["Account Name"]] = row["Remarks"]
 
     if st.button("⚡ Calculate Optimal Route", type="primary", disabled=picked.empty):
         depot_row = pd.DataFrame([{"Account Name": DEPOT_NAME, "Latitude": DEPOT_LAT, "Longitude": DEPOT_LNG}])
-        stops = picked[["Account Name", "Latitude", "Longitude"]]
-        route_df = pd.concat([depot_row, stops]).reset_index(drop=True)
-        with st.spinner("Fetching travel times and optimizing..."):
-            result = optimize_single_route(route_df, objective, traffic_factor, provider,
-                                           osrm_server, mapbox_token, solver_seconds)
+        route_df = pd.concat([depot_row, picked[["Account Name", "Latitude", "Longitude"]]]).reset_index(drop=True)
+        with st.spinner("Optimizing manifest path vector metrics..."):
+            result = optimize_single_route(route_df, objective, traffic_factor, provider, osrm_server, mapbox_token, solver_seconds)
         if result:
-            factor = result["factor"]
             order = result["order"]
-            ordered = [{"name": route_df.iloc[n]["Account Name"],
-                        "lat": float(route_df.iloc[n]["Latitude"]),
-                        "lng": float(route_df.iloc[n]["Longitude"])} for n in order[1:-1]]
-            t_time, t_dist = route_totals(order, result["durations"], result["distances"], factor)
+            ordered = [{"name": route_df.iloc[n]["Account Name"], "lat": float(route_df.iloc[n]["Latitude"]), "lng": float(route_df.iloc[n]["Longitude"])} for n in order[1:-1]]
+            t_time, t_dist = route_totals(order, result["durations"], result["distances"], result["factor"])
             terr = dict(zip(ACCOUNTS["Account Name"], ACCOUNTS["Territory"]))
-            findings = analyze_route(route_df, order, result["distances"], factor, result["durations"], terr)
+            findings = analyze_route(route_df, order, result["distances"], result["factor"], result["durations"], terr)
             st.session_state.disp_route = {
                 "ordered": ordered, "driver": driver, "truck": truck,
-                "total_km": t_dist / 1000.0, "time_str": fmt_duration(t_time),
-                "source": result["source"],
+                "total_km": t_dist / 1000.0, "time_str": fmt_duration(t_time), "source": result["source"]
             }
             st.session_state.disp_step = 1
-            st.session_state.disp_ai = generate_ai_comment(
-                findings, len(ordered), t_dist / 1000.0, fmt_duration(t_time),
-                [s["name"] for s in ordered], ai_api_key, ai_model)
+            st.session_state.disp_ai = generate_ai_comment(findings, len(ordered), t_dist / 1000.0, fmt_duration(t_time), [s["name"] for s in ordered], ai_api_key, ai_model)
         else:
             st.error("No solution found.")
 
@@ -860,53 +830,23 @@ def dispatcher_page():
         m1.metric("Deliveries", len(route["ordered"]))
         m2.metric("Total distance", f"{route['total_km']:.1f} km")
         m3.metric("Est. drive time", route["time_str"])
-        src_msg = {"mapbox": "🚦 Mapbox live traffic", "osrm": "🛣️ OSRM (no traffic)",
-                   "fallback": "⚠️ straight-line estimate"}[route["source"]]
-        st.caption(f"Routing source: {src_msg}")
-
-        if st.session_state.get("disp_ai"):
-            with st.container(border=True):
-                st.markdown("#### 🤖 AI Dispatcher Comment")
-                st.markdown(st.session_state.disp_ai)
 
         full_seq = [depot_node()] + route["ordered"] + [depot_node()]
-        use_mapbox = bool(DEFAULT_MAPBOX_TOKEN)
-        render_step_tracker(full_seq, "disp_step", use_mapbox, DEFAULT_MAPBOX_TOKEN,
-                            OSRM_DEFAULT, map_height, st.session_state.get("remarks", {}))
+        render_step_tracker(full_seq, "disp_step", bool(DEFAULT_MAPBOX_TOKEN), DEFAULT_MAPBOX_TOKEN, OSRM_DEFAULT, map_height, st.session_state.get("remarks", {}))
 
-        st.divider()
-        if st.button(f"📌 Assign this route to {route['driver']}", type="primary"):
-            stops_payload = [{"name": s["name"], "lat": s["lat"], "lng": s["lng"],
-                              "remarks": st.session_state.get("remarks", {}).get(s["name"], ""),
-                              "delivered": False, "arrival_time": None, "auto_verified": False} for s in route["ordered"]]
-            aid = create_assignment(route["driver"], route["truck"], stops_payload,
-                                    route["total_km"], route["time_str"], USER["name"])
-            st.success(f"Assigned to {route['driver']} (assignment #{aid}). It now shows on their account.")
+        if st.button(f"📌 Assign route to {route['driver']}", type="primary"):
+            stops_payload = [{"name": s["name"], "lat": s["lat"], "lng": s["lng"], "remarks": st.session_state.get("remarks", {}).get(s["name"], ""), "delivered": False, "arrival_time": None, "auto_verified": False} for s in route["ordered"]]
+            aid = create_assignment(route["driver"], route["truck"], stops_payload, route["total_km"], route["time_str"], USER["name"])
+            st.success(f"Assigned to {route['driver']} (assignment #{aid}).")
 
     st.divider()
     st.subheader("📑 Live Assignment Monitoring Dashboard")
     rows = list_assignments()
-    if not rows:
-        st.caption("No assignments yet.")
     for a in rows:
         with st.expander(f"#{a['id']} · {a['run_date']} · {a['driver']} · {a['truck']} · {a['status']}"):
             stops = json.loads(a["stops_json"])
-            done = sum(1 for s in stops if s.get("delivered"))
-            st.write(f"**Progress:** {done}/{len(stops)} delivered · {a['total_km']:.1f} km · ~{a['time_str']} · Dispatcher: {a['created_by']}")
-            
-            # Live synchronization tracking breakdown for dispatch dashboard
-            breakdown_data = []
-            for idx, s in enumerate(stops):
-                breakdown_data.append({
-                    "Stop #": idx + 1,
-                    "Location Name": s["name"],
-                    "Status": "✅ Completed" if s.get("delivered") else "⏳ Pending",
-                    "Arrival Timestamp": s.get("arrival_time") if s.get("arrival_time") else "—",
-                    "Verification Mode": "🤖 Auto-GPS Geofence" if s.get("auto_verified") else ("✍️ Manual" if s.get("delivered") else "—")
-                })
-            st.table(breakdown_data)
-            
-            if st.button("Delete Assignment", key=f"del_{a['id']}", type="secondary"):
+            st.write(f"**Progress:** {sum(1 for s in stops if s.get('delivered'))}/{len(stops)} completed.")
+            if st.button("Delete Assignment", key=f"del_{a['id']}"):
                 delete_assignment(a["id"])
                 st.rerun()
 
@@ -919,20 +859,49 @@ def driver_page():
     
     # --- GPS Location Collection Component ---
     loc_json = streamlit_js_eval(
-        data_string="navigator.geolocation.getCurrentPosition(function(pos){return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude})}, function(err){return null;}, {enableHighAccuracy:true});", 
+        data_string="""
+        navigator.geolocation.getCurrentPosition(
+            function(pos){
+                document.getElementById('gps_err_flag').style.display = 'none';
+                return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false});
+            }, 
+            function(err){
+                return JSON.stringify({latitude: null, longitude: null, error: true});
+            }, 
+            {enableHighAccuracy:true, timeout: 5000}
+        );
+        """, 
         key="get_location"
     )
     
     driver_coords = None
+    gps_hardware_error = False
+    
     if loc_json:
         try:
-            driver_coords = json.loads(loc_json)
+            parsed_gps = json.loads(loc_json)
+            if parsed_gps.get("error") == True:
+                gps_hardware_error = True
+            else:
+                driver_coords = parsed_gps
         except Exception:
             pass
 
+    # UI prompt if the device GPS is turned off
+    if gps_hardware_error or not driver_coords:
+        st.markdown(
+            """
+            <div id="gps_err_flag" style="background-color: #FF4136; color: white; padding: 16px; 
+                        border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-family: sans-serif;">
+                ⚠️ GPS Location Service is Disabled! Please turn on your device GPS location permissions to calibrate navigation parameters.
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
     mine = list_assignments(driver=USER["name"])
     if not mine:
-        st.info("No routes assigned to you yet. Your dispatcher will assign one.")
+        st.info("No routes assigned to you yet.")
         return
 
     labels = {f"#{a['id']} · {a['run_date']} · {a['truck']} · {a['status']}": a["id"] for a in mine}
@@ -946,46 +915,33 @@ def driver_page():
     a = get_assignment(aid)
     stops = json.loads(a["stops_json"])
 
-    # LIVE AUTOMATED GPS GEOFENCE CHECK
-    db_changed = False
+    # GEOFENCE PROCESSING HANDSHAKE
     if driver_coords and driver_coords.get("latitude"):
-        st.sidebar.success(f"📍 GPS Active: {driver_coords['latitude']:.5f}, {driver_coords['longitude']:.5f}")
-        
+        st.sidebar.success(f"📍 Location Sync Lock Active")
+        db_changed = False
         for s in stops:
             if not s.get("delivered"):
-                dist_to_stop = single_haversine(
-                    driver_coords["latitude"], driver_coords["longitude"],
-                    s["lat"], s["lng"]
-                )
-                # Auto check-in trigger if vehicle enters coordinate radius
-                if dist_to_stop <= GEOFENCE_RADIUS_METERS:
+                if single_haversine(driver_coords["latitude"], driver_coords["longitude"], s["lat"], s["lng"]) <= GEOFENCE_RADIUS_METERS:
                     s["delivered"] = True
                     s["auto_verified"] = True
                     s["arrival_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
                     db_changed = True
-                    st.toast(f"🤖 Automatically checked into: {s['name']}! Location verified by GPS.", icon="✅")
-        
+                    st.toast(f"🤖 Checked into: {s['name']} via GPS!", icon="✅")
         if db_changed:
-            status = "Completed" if all(s["delivered"] for s in stops) else \
-                     ("In progress" if any(s["delivered"] for s in stops) else "Assigned")
+            status = "Completed" if all(s["delivered"] for s in stops) else "In progress"
             update_assignment(aid, stops, status)
             st.rerun()
+
+    # Dynamic starting origin allocation calculation setup
+    if driver_coords and driver_coords.get("latitude"):
+        origin_node = {"name": "Your Current Location", "lat": driver_coords["latitude"], "lng": driver_coords["longitude"]}
     else:
-        st.sidebar.warning("⚠️ Waiting for mobile phone GPS signal. Ensure location permissions are permitted.")
+        origin_node = depot_node()
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Stops", len(stops))
-    m2.metric("Distance", f"{a['total_km']:.1f} km")
-    m3.metric("Est. drive time", a["time_str"])
-    st.caption(f"Truck: **{a['truck']}** ·  Status: **{a['status']}** ·  Depot: **{DEPOT_NAME}**")
-
-    full_seq = [depot_node()] + [{"name": s["name"], "lat": s["lat"], "lng": s["lng"]} for s in stops] + [depot_node()]
+    full_seq = [origin_node] + [{"name": s["name"], "lat": s["lat"], "lng": s["lng"]} for s in stops] + [depot_node()]
     remarks_map = {s["name"]: s.get("remarks", "") for s in stops}
-    use_mapbox = bool(DEFAULT_MAPBOX_TOKEN)
     
-    # Pass live telemetry stream markers down to the rendering interface
-    render_step_tracker(full_seq, "drv_step", use_mapbox, DEFAULT_MAPBOX_TOKEN,
-                        OSRM_DEFAULT, 520, remarks_map, driver_coords=driver_coords)
+    render_step_tracker(full_seq, "drv_step", bool(DEFAULT_MAPBOX_TOKEN), DEFAULT_MAPBOX_TOKEN, OSRM_DEFAULT, 540, remarks_map, driver_coords=driver_coords)
 
     st.divider()
     st.subheader("✅ Delivery Checklist")
@@ -993,29 +949,23 @@ def driver_page():
     for i, s in enumerate(stops):
         time_lbl = f" (Arrived: {s['arrival_time']})" if s.get("arrival_time") else ""
         mode_lbl = " [🤖 GPS Verified]" if s.get("auto_verified") else ""
-        label = f"{i + 1}. {s['name']}{time_lbl}{mode_lbl}" + (f"  —  _{s['remarks']}_" if s.get("remarks") else "")
-        
-        new_flags.append(st.checkbox(label, value=s.get("delivered", False), key=f"chk_{aid}_{i}"))
+        new_flags.append(st.checkbox(f"{i + 1}. {s['name']}{time_lbl}{mode_lbl}", value=s.get("delivered", False), key=f"chk_{aid}_{i}"))
         
     if st.button("💾 Save progress manually", type="primary"):
         for i, (s, flag) in enumerate(zip(stops, new_flags)):
             if flag and not s.get("delivered"):
                 s["delivered"] = True
                 s["arrival_time"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-                s["auto_verified"] = False
             elif not flag:
                 s["delivered"] = False
                 s["arrival_time"] = None
                 s["auto_verified"] = False
-                
-        status = "Completed" if all(s["delivered"] for s in stops) else \
-                 ("In progress" if any(s["delivered"] for s in stops) else "Assigned")
+        status = "Completed" if all(s["delivered"] for s in stops) else "In progress"
         update_assignment(aid, stops, status)
-        st.success(f"Saved. Status: {status}.")
+        st.success("Progress catalog updated successfully.")
         st.rerun()
 
 
-# Route to the correct page by role
 if USER["role"] == "dispatcher":
     dispatcher_page()
 else:
