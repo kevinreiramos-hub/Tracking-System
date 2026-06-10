@@ -182,13 +182,20 @@ init_db()
 if "auth" not in st.session_state:
     st.session_state.auth = None
 
-# Silently query the browser's local storage for a saved user session token
+# Query local storage for a saved user session token
 saved_session_str = streamlit_js_eval(
     data_string="localStorage.getItem('cord_user_session');",
     key="get_local_session"
 )
 
-# If a browser session exists and Python state is empty, auto-login and rerun smoothly
+# Handshake validation check: If Python has no auth state but the evaluation key 
+# has not registered yet, render an empty fallback container to hold execution 
+# without triggering st.stop() or blank screens.
+if st.session_state.auth is None and "get_local_session" not in st.session_state:
+    st.empty()
+    st.rerun()
+
+# If session records exist and state is currently clean, resume session automatically
 if saved_session_str and st.session_state.auth is None:
     try:
         saved_data = json.loads(saved_session_str)
