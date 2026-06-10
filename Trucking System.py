@@ -574,7 +574,6 @@ def build_route_map(full_seq, current_idx, use_mapbox, token, server, driver_coo
     else:
         m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_val, zoom_control=False)
 
-    # Plot origin starting location
     start_node = full_seq[0]
     folium.Marker([start_node["lat"], start_node["lng"]], popup=start_node["name"],
                   icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(m)
@@ -638,20 +637,17 @@ def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_heigh
     st.session_state[step_key] = cur
     dest = full_seq[cur]
 
-    # Generate map shapes and pull step coordinates
     m, nav_steps = build_route_map(
         full_seq, cur, use_mapbox, token, server, 
         driver_coords=driver_coords, 
         center_on_driver=st.session_state[center_flag_key]
     )
 
-    # --- GOOGLE MAPS FLOATING IN-MAP TURN-BY-TURN CONTAINER CONTROLLER ---
     floating_nav_html = ""
     if nav_steps:
         next_maneuver = nav_steps[0]
         dist_str = f"{next_maneuver['distance']:.0f}m" if next_maneuver['distance'] < 1000 else f"{next_maneuver['distance']/1000:.1f}km"
         
-        # Build direct absolute DOM wrapper overlay inside map view canvas frame
         floating_nav_html = f"""
         <div style="position: absolute; top: 12px; left: 50%; transform: translateX(-50%); 
                     width: 90%; max-width: 480px; z-index: 9999; pointer-events: none;">
@@ -674,17 +670,14 @@ def render_step_tracker(full_seq, step_key, use_mapbox, token, server, map_heigh
         </div>
         """
 
-    # Render inside columns layout
     col_map, col_list = st.columns([2, 1])
     
     with col_map:
-        # Inject floating HTML widget overlay directly inside parent column space
         if floating_nav_html:
             st.components.v1.html(floating_nav_html, height=0)
             
         st_folium(m, width=900, height=map_height, key=f"{step_key}_map_{cur}_rec_{st.session_state[center_flag_key]}", returned_objects=[])
         
-        # Controls directly below map
         c_prev, c_center, c_next = st.columns([1, 2, 1])
         with c_prev:
             if st.button("⬅️ Previous", disabled=(st.session_state[step_key] <= 1), use_container_width=True, key=f"{step_key}_prev"):
@@ -862,13 +855,12 @@ def driver_page():
         data_string="""
         navigator.geolocation.getCurrentPosition(
             function(pos){
-                document.getElementById('gps_err_flag').style.display = 'none';
-                return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false});
+                return JSON.stringify({latitude: pos.coords.latitude, longitude: pos.coords.longitude, error: false, code: 0});
             }, 
             function(err){
-                return JSON.stringify({latitude: null, longitude: null, error: true});
+                return JSON.stringify({latitude: null, longitude: null, error: true, code: err.code});
             }, 
-            {enableHighAccuracy:true, timeout: 5000}
+            {enableHighAccuracy:true, timeout: 6000}
         );
         """, 
         key="get_location"
@@ -876,24 +868,44 @@ def driver_page():
     
     driver_coords = None
     gps_hardware_error = False
+    permission_denied_error = False
     
     if loc_json:
         try:
             parsed_gps = json.loads(loc_json)
             if parsed_gps.get("error") == True:
-                gps_hardware_error = True
+                if parsed_gps.get("code") == 1:  # PERMISSION_DENIED constant
+                    permission_denied_error = True
+                else:
+                    gps_hardware_error = True
             else:
                 driver_coords = parsed_gps
         except Exception:
             pass
 
-    # UI prompt if the device GPS is turned off
-    if gps_hardware_error or not driver_coords:
+    # Dynamic diagnostic alerts tailored to phone context
+    if permission_denied_error:
+        st.markdown(
+            """
+            <div style="background-color: #FF9500; color: white; padding: 16px; border-radius: 10px; margin-bottom: 22px; font-family: sans-serif;">
+                🔒 <b>Browser Location Access Blocked!</b><br>
+                Your phone's global GPS is ON, but your browser is blocking this website. 
+                <ul style="margin-top: 6px; margin-bottom: 0px; padding-left: 20px;">
+                    <li><b>Android:</b> Tap the lock icon 🔒 next to the web URL bar -> Tap <b>Site Settings</b> -> Set <b>Location</b> to <b>Allow</b>.</li>
+                    <li><b>iPhone:</b> Open phone <b>Settings</b> -> <b>Safari</b> -> <b>Location</b> -> Change to <b>Allow</b>.</li>
+                </ul>
+                Then refresh the page!
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+    elif gps_hardware_error or not driver_coords:
         st.markdown(
             """
             <div id="gps_err_flag" style="background-color: #FF4136; color: white; padding: 16px; 
-                        border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-family: sans-serif;">
-                ⚠️ GPS Location Service is Disabled! Please turn on your device GPS location permissions to calibrate navigation parameters.
+                        border-radius: 10px; margin-bottom: 22px; font-weight: bold; font-family: sans-serif;">
+                ⚠️ <b>GPS Hardware Signal Missing!</b><br>
+                Please ensure location permissions are active and that you are not inside a deep basement blocking satellite reception.
             </div>
             """, 
             unsafe_allow_html=True
@@ -932,7 +944,6 @@ def driver_page():
             update_assignment(aid, stops, status)
             st.rerun()
 
-    # Dynamic starting origin allocation calculation setup
     if driver_coords and driver_coords.get("latitude"):
         origin_node = {"name": "Your Current Location", "lat": driver_coords["latitude"], "lng": driver_coords["longitude"]}
     else:
